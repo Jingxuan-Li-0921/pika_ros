@@ -176,7 +176,7 @@ def get_device_info(localization_tag=True):
     return serial_number, usb_path, video_path, localization_tag_serial
 
 
-def generate_setup_bash(left_info, right_info, select, helmet_with_tracker=False):
+def generate_setup_bash(left_info, right_info, select, helmet_with_tracker=False, helmet_info=None):
     if select == "1":
         path = "setup_multi_sensor.bash"
         usb_num1 = 50
@@ -215,8 +215,28 @@ def generate_setup_bash(left_info, right_info, select, helmet_with_tracker=False
         to2 = None
         if helmet_with_tracker:
             set_env_var_persistent("pika_H_code", left_info[3])
+    if select == "5":
+        path = "setup_multi_sensor_helmet_whit_tracker.bash"
+        set_env_var_persistent("pika_L_code", left_info[3])
+        set_env_var_persistent("pika_R_code", right_info[3])
+        set_env_var_persistent("pika_H_code", helmet_info[3])
+        content = f"""
+#/bin/bash
+
+sudo sh -c 'echo "ACTION==\\\"add\\\", KERNELS==\\\"{left_info[1]}\\\", SUBSYSTEMS==\\\"usb\\\", MODE:=\\\"0777\\\", SYMLINK+=\\\"ttyUSB50\\\"" > /etc/udev/rules.d/sensor_serial.rules'
+sudo sh -c 'echo "ACTION==\\\"add\\\", KERNELS==\\\"{right_info[1]}\\\", SUBSYSTEMS==\\\"usb\\\", MODE:=\\\"0777\\\", SYMLINK+=\\\"ttyUSB51\\\"" >> /etc/udev/rules.d/sensor_serial.rules'
+sudo sh -c 'echo "ACTION==\\\"add\\\", KERNELS==\\\"{helmet_info[1]}\\\", SUBSYSTEMS==\\\"usb\\\", MODE:=\\\"0777\\\", SYMLINK+=\\\"ttyUSB70\\\"" > /etc/udev/rules.d/helmet_serial.rules'
+
+sudo sh -c 'echo "ACTION==\\\"add\\\", KERNEL==\\\"video[0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48]*\\\", KERNELS==\\\"{left_info[2]}\\\", SUBSYSTEMS==\\\"usb\\\", MODE:=\\\"0777\\\", SYMLINK+=\\\"video50\\\"" > /etc/udev/rules.d/sensor_fisheye.rules'
+sudo sh -c 'echo "ACTION==\\\"add\\\", KERNEL==\\\"video[0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48]*\\\", KERNELS==\\\"{right_info[2]}\\\", SUBSYSTEMS==\\\"usb\\\", MODE:=\\\"0777\\\", SYMLINK+=\\\"video51\\\"" >> /etc/udev/rules.d/sensor_fisheye.rules'
+sudo sh -c 'echo "ACTION==\\\"add\\\", KERNEL==\\\"video[0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48]*\\\", KERNELS==\\\"{helmet_info[2]}\\\", SUBSYSTEMS==\\\"usb\\\", MODE:=\\\"0777\\\", SYMLINK+=\\\"video70\\\"" > /etc/udev/rules.d/helmet_fisheye.rules'
+
+sudo udevadm control --reload-rules && sudo service udev restart && sudo udevadm trigger
+            """
     """Generate setup.bash file."""
-    if usb_num2 is not None:
+    if select == "5":
+        pass
+    elif usb_num2 is not None:
         content = f"""
 #/bin/bash
 
@@ -244,7 +264,7 @@ sudo udevadm control --reload-rules && sudo service udev restart && sudo udevadm
     os.chmod(path, 0o755)
 
 
-def generate_start_bash(left_info, right_info, select, helmet_with_tracker=False):
+def generate_start_bash(left_info, right_info, select, helmet_with_tracker=False, helmet_info=None):
     if select == "1":
         path = "start_multi_sensor.bash"
         usb_num1 = 50
@@ -335,6 +355,33 @@ sudo chmod a+rw /dev/video*
 source /opt/ros/humble/setup.bash && cd $SCRIPT_DIR/../install/sensor_tools/share/sensor_tools/scripts/ && chmod 777 usb_camera.py
 source $SCRIPT_DIR/../install/setup.bash && ros2 launch sensor_tools {helmet_launch} depth_camera_no:=_$helmet_depth_camera_no serial_port:=$helmet_serial_port fisheye_port:=$helmet_fisheye_port camera_fps:=$camera_fps camera_width:=$camera_width camera_height:=$camera_height camera_profile:=$camera_width,$camera_height,$camera_fps
                 """
+    if select == "5":
+        path = "start_multi_sensor_helmet_whit_tracker.bash"
+        content = f"""
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+camera_fps=30
+camera_width=640
+camera_height=480
+l_depth_camera_no={left_info[0]}
+r_depth_camera_no={right_info[0]}
+h_depth_camera_no={helmet_info[0]}
+
+l_serial_port=/dev/ttyUSB50
+r_serial_port=/dev/ttyUSB51
+h_serial_port=/dev/ttyUSB70
+sudo chmod a+rw /dev/ttyUSB*
+l_fisheye_port=50
+r_fisheye_port=51
+h_fisheye_port=70
+sudo chmod a+rw /dev/video*
+
+source /opt/ros/humble/setup.bash && cd $SCRIPT_DIR/../install/sensor_tools/share/sensor_tools/scripts/ && chmod 777 usb_camera.py
+if [ -n "$1" ]; then
+    source $SCRIPT_DIR/../install/setup.bash && ros2 launch sensor_tools open_multi_sensor_helmet_whit_tracker.launch.py l_depth_camera_no:=_$l_depth_camera_no r_depth_camera_no:=_$r_depth_camera_no h_depth_camera_no:=_$h_depth_camera_no l_serial_port:=$l_serial_port r_serial_port:=$r_serial_port h_serial_port:=$h_serial_port l_fisheye_port:=$l_fisheye_port r_fisheye_port:=$r_fisheye_port h_fisheye_port:=$h_fisheye_port camera_fps:=$camera_fps camera_width:=$camera_width camera_height:=$camera_height camera_profile:=$camera_width,$camera_height,$camera_fps name:=$1 name_index:=$1_
+else
+    source $SCRIPT_DIR/../install/setup.bash && ros2 launch sensor_tools open_multi_sensor_helmet_whit_tracker.launch.py l_depth_camera_no:=_$l_depth_camera_no r_depth_camera_no:=_$r_depth_camera_no h_depth_camera_no:=_$h_depth_camera_no l_serial_port:=$l_serial_port r_serial_port:=$r_serial_port h_serial_port:=$h_serial_port l_fisheye_port:=$l_fisheye_port r_fisheye_port:=$r_fisheye_port h_fisheye_port:=$h_fisheye_port camera_fps:=$camera_fps camera_width:=$camera_width camera_height:=$camera_height camera_profile:=$camera_width,$camera_height,$camera_fps
+fi
+                """
     with open(path, "w") as f:
         f.write(content)
     os.chmod(path, 0o755)
@@ -351,12 +398,14 @@ def main():
             "2.两个pika gripper(安装于机械臂上的夹爪)\n"
             "3.一个pika sensor 一个pika gripper\n"
             "4.一个pika helmet\n"
+            "5.两个pika sensor和一个带定位器的helmet\n"
             "请输入：",
             "Please select binding\n"
             "1. Two pika sensors (handheld grippers)\n"
             "2. Two pika grippers (mounted on robot arm)\n"
             "3. One pika sensor and one pika gripper\n"
             "4. One pika helmet\n"
+            "5. Two pika sensors and one helmet with tracker\n"
             "Enter:",
         )
         if select == "1":
@@ -383,8 +432,14 @@ def main():
             ).strip()
             helmet_with_tracker = tracker_select == "1"
             break
+        if select == "5":
+            device1 = "左"
+            device2 = "右"
+            device3 = "helmet"
+            helmet_with_tracker = True
+            break
         else:
-            print_bilingual("请输入1、2、3或4", "Please enter 1, 2, 3, or 4")
+            print_bilingual("请输入1、2、3、4或5", "Please enter 1, 2, 3, 4, or 5")
             continue
 
     print_bilingual(
@@ -397,7 +452,7 @@ def main():
         f"Getting {device_label(device1, 'en')} device information...",
     )
     while True:
-        left_info = get_device_info(True if select == "1" or select == "3" or (select == "4" and helmet_with_tracker) else False)
+        left_info = get_device_info(True if select == "1" or select == "3" or select == "5" or (select == "4" and helmet_with_tracker) else False)
         if not left_info[0]:
             print_bilingual(
                 f"无法获取{device_label(device1)}设备信息，请检查设备连接，然后按回车键继续...",
@@ -426,7 +481,7 @@ def main():
             f"Getting {device_label(device2, 'en')} device information...",
         )
         while True:
-            right_info = get_device_info(True if select == "1" else False)
+            right_info = get_device_info(True if select == "1" or select == "5" else False)
             if not right_info[0]:
                 print_bilingual(
                     f"无法获取{device_label(device2)}设备信息，请检查设备连接，然后按回车键继续...",
@@ -441,12 +496,40 @@ def main():
             f"{device_label(device2, 'en')} device info: {right_info[0]} {right_info[1]} {right_info[2]} {right_info[3]}",
         )
 
+    helmet_info = None
+    if select == "5":
+        print_bilingual(
+            f"请拔出{device_label(device2)}设备，插入{device_label(device3)}设备（注意不要插在同一个USB口，配置完成后USB口不能改变），然后按回车键继续...",
+            f"Please unplug the {device_label(device2, 'en')} device and plug in the {device_label(device3, 'en')} device "
+            "(do not use the same USB port; the USB port must not change after setup), then press Enter to continue...",
+        )
+        input()
+        print_bilingual(
+            f"正在获取{device_label(device3)}设备信息...",
+            f"Getting {device_label(device3, 'en')} device information...",
+        )
+        while True:
+            helmet_info = get_device_info(True)
+            if not helmet_info[0]:
+                print_bilingual(
+                    f"无法获取{device_label(device3)}设备信息，请检查设备连接，然后按回车键继续...",
+                    f"Unable to get {device_label(device3, 'en')} device information. "
+                    "Please check the device connection, then press Enter to continue...",
+                )
+                input()
+            else:
+                break
+        print_bilingual(
+            f"{device_label(device3)}设备信息: {helmet_info[0]} {helmet_info[1]} {helmet_info[2]} {helmet_info[3]}",
+            f"{device_label(device3, 'en')} device info: {helmet_info[0]} {helmet_info[1]} {helmet_info[2]} {helmet_info[3]}",
+        )
+
     # 生成配置文件
     print_bilingual("正在生成配置文件...", "Generating configuration files...")
-    generate_setup_bash(left_info, right_info, select, helmet_with_tracker)
-    generate_start_bash(left_info, right_info, select, helmet_with_tracker)
-    setup_path = "setup_multi_sensor.bash" if select=="1" else ("setup_multi_gripper.bash" if select=="2" else ("setup_sensor_gripper.bash" if select == "3" else "setup_helmet.bash"))
-    start_path = "start_multi_sensor.bash" if select=="1" else ("start_multi_gripper.bash" if select=="2" else ("start_sensor_gripper.bash" if select == "3" else "start_helmet.bash"))
+    generate_setup_bash(left_info, right_info, select, helmet_with_tracker, helmet_info)
+    generate_start_bash(left_info, right_info, select, helmet_with_tracker, helmet_info)
+    setup_path = "setup_multi_sensor.bash" if select=="1" else ("setup_multi_gripper.bash" if select=="2" else ("setup_sensor_gripper.bash" if select == "3" else ("setup_helmet.bash" if select == "4" else "setup_multi_sensor_helmet_whit_tracker.bash")))
+    start_path = "start_multi_sensor.bash" if select=="1" else ("start_multi_gripper.bash" if select=="2" else ("start_sensor_gripper.bash" if select == "3" else ("start_helmet.bash" if select == "4" else "start_multi_sensor_helmet_whit_tracker.bash")))
     print_bilingual("配置完成！已生成以下文件：", "Setup complete! The following files were generated:")
     print(f"1. {setup_path}")
     print(f"2. {start_path}")
@@ -464,13 +547,13 @@ def main():
         time.sleep(5)
         video_list = run_command("ls /dev | grep video")
         usb_list = run_command("ls /dev | grep ttyUSB")
-        if (select == "1" or select == "3") and video_list.find("50") < 0:
+        if (select == "1" or select == "3" or select == "5") and video_list.find("50") < 0:
             print_bilingual(
                 "找不到sensor（左）鱼眼",
                 "Cannot find sensor (left) fisheye camera",
             )
             continue
-        if (select == "1") and video_list.find("51") < 0:
+        if (select == "1" or select == "5") and video_list.find("51") < 0:
             print_bilingual(
                 "找不到sensor（右）鱼眼",
                 "Cannot find sensor (right) fisheye camera",
@@ -488,13 +571,13 @@ def main():
                 "Cannot find gripper (right) fisheye camera",
             )
             continue
-        if (select == "1" or select == "3") and usb_list.find("50") < 0:
+        if (select == "1" or select == "3" or select == "5") and usb_list.find("50") < 0:
             print_bilingual(
                 "找不到sensor（左）串口",
                 "Cannot find sensor (left) serial port",
             )
             continue
-        if (select == "1") and usb_list.find("51") < 0:
+        if (select == "1" or select == "5") and usb_list.find("51") < 0:
             print_bilingual(
                 "找不到sensor（右）串口",
                 "Cannot find sensor (right) serial port",
@@ -512,7 +595,7 @@ def main():
                 "Cannot find gripper (right) serial port",
             )
             continue
-        if (select == "4") and usb_list.find("70") < 0:
+        if (select == "4" or select == "5") and usb_list.find("70") < 0:
             print_bilingual(
                 "找不到helmet串口",
                 "Cannot find helmet serial port",
