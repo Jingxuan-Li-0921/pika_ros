@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+import argparse
+import json
+import shlex
 import subprocess
 import re
 import os
@@ -31,13 +34,14 @@ def device_label(name, lang="zh"):
     return zh if lang == "zh" else en
 
 
-def set_env_var_persistent(key, value, shell_rc="~/.bashrc"):
+def set_env_var_persistent(key, value, shell_rc="~/.config/pika/device.env"):
     rc_path = Path(shell_rc).expanduser()
+    rc_path.parent.mkdir(parents=True, exist_ok=True)
     if not rc_path.exists():
         rc_path.touch()
 
     lines = rc_path.read_text().splitlines()
-    export_line = f'export {key}={value}'
+    export_line = f'export {key}={shlex.quote(str(value))}'
     updated = False
 
     for i, line in enumerate(lines):
@@ -53,10 +57,16 @@ def set_env_var_persistent(key, value, shell_rc="~/.bashrc"):
     print(f"Updated {rc_path}")
 
 
-def run_command(command):
+def run_command(command, *, report_error=False):
     """Run a command and return its output."""
     try:
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        if result.returncode != 0 and report_error:
+            detail = result.stderr.strip() or f"exit status {result.returncode}"
+            print_bilingual(
+                f"命令执行失败: {command}\n{detail}",
+                f"Command failed: {command}\n{detail}",
+            )
         return result.stdout.strip()
     except Exception as e:
         print_bilingual(
@@ -88,15 +98,22 @@ def get_device_info(localization_tag=True):
     serial_number = serial_match.group(1)
 
     # 运行 udevadm 命令
-    ls_output = run_command("ls /dev | grep ttyUSB | grep -v ttyUSB50 | grep -v ttyUSB51 | grep -v ttyUSB60 | grep -v ttyUSB61 | grep -v ttyUSB70")
-    count = ls_output.count("tty")
-    if count > 1:
+    serial_devices = sorted(
+        path.name
+        for path in Path("/dev").glob("ttyUSB*")
+        if path.name not in {"ttyUSB50", "ttyUSB51", "ttyUSB60", "ttyUSB61", "ttyUSB70"}
+    )
+    if len(serial_devices) != 1:
         print_bilingual(
-            "请确保工控机只插入一个USB串口设备",
-            "Please ensure only one USB serial device is connected to the industrial PC",
+            "请确保工控机只插入一个未绑定的USB串口设备",
+            "Please ensure exactly one unbound USB serial device is connected to the industrial PC",
         )
         return None, None, None, None
-    udev_output = run_command(f"udevadm info /dev/{ls_output} | grep DEVPATH")
+    ls_output = serial_devices[0]
+    udev_output = run_command(
+        f"udevadm info --query=path --name=/dev/{shlex.quote(ls_output)}",
+        report_error=True,
+    )
     if not udev_output:
         print_bilingual(
             "无法获取到串口数据",
@@ -105,8 +122,11 @@ def get_device_info(localization_tag=True):
         return None, None, None, None
 
     # 解析 USB 路径
-    usb_path = udev_output[:udev_output.find(ls_output)][:-1]  # 获取 1-13.2.4:1.0 这样的格式
-    usb_path = usb_path[usb_path.rfind("/")+1:]
+    usb_interfaces = re.findall(r"/([^/]+:\d+\.\d+)(?:/|$)", udev_output)
+    if not usb_interfaces:
+        print_bilingual("无法解析串口USB路径", "Unable to parse the serial USB path")
+        return None, None, None, None
+    usb_path = usb_interfaces[-1]
     # print("寻找鱼眼摄像头，请在出现鱼眼摄像头时按下s，非鱼眼摄像头则按下q(注意在图像窗口按下，不要在终端！！！)")
     # video_path = None
     # cv2.setLogLevel(0)
@@ -137,16 +157,26 @@ def get_device_info(localization_tag=True):
     #     print("无法获取到鱼眼摄像头数据")
     #     return None, None
 
+    video_device = None
     for i in range(50):
         video_output1 = run_command(f"cat /sys/class/video4linux/video{i}/device/../idVendor 2>/dev/null")
         video_output2 = run_command(f"cat /sys/class/video4linux/video{i}/device/../idProduct 2>/dev/null")
         if video_output1 == "1bcf" and video_output2 == "2cd1":
-            video_path = 'video' + str(i)
+            video_device = 'video' + str(i)
             break
 
-    udev_output = run_command(f"udevadm info /dev/{video_path} | grep DEVPATH")
-    video_path = udev_output[:udev_output.find("video")][:-1]  # 获取 1-13.2.4:1.0 这样的格式
-    video_path = video_path[video_path.rfind("/")+1:]
+    if video_device is None:
+        print_bilingual("无法获取到鱼眼摄像头数据", "Unable to get fisheye camera data")
+        return None, None, None, None
+    udev_output = run_command(
+        f"udevadm info --query=path --name=/dev/{shlex.quote(video_device)}",
+        report_error=True,
+    )
+    video_interfaces = re.findall(r"/([^/]+:\d+\.\d+)(?:/|$)", udev_output)
+    if not video_interfaces:
+        print_bilingual("无法解析鱼眼USB路径", "Unable to parse the fisheye USB path")
+        return None, None, None, None
+    video_path = video_interfaces[-1]
 
     localization_tag_serial = None
     if localization_tag:
@@ -174,6 +204,78 @@ def get_device_info(localization_tag=True):
         localization_tag_serial = localization_tag_serial_match.group(1)
 
     return serial_number, usb_path, video_path, localization_tag_serial
+
+
+def binding_entries(left_info, right_info, select, helmet_info=None):
+    """Return (kind, device_info, stable_number) entries for host udev."""
+    if select == "1":
+        return [("sensor", left_info, 50), ("sensor", right_info, 51)]
+    if select == "2":
+        return [("gripper", left_info, 60), ("gripper", right_info, 61)]
+    if select == "3":
+        return [("sensor", left_info, 50), ("gripper", right_info, 60)]
+    if select == "4":
+        return [("helmet", left_info, 70)]
+    if select == "5":
+        return [
+            ("sensor", left_info, 50),
+            ("sensor", right_info, 51),
+            ("helmet", helmet_info, 70),
+        ]
+    raise ValueError(f"unsupported binding selection: {select}")
+
+
+def generate_host_bundle(left_info, right_info, select, output_dir, helmet_info=None):
+    """Generate data files for host-side udev installation without running sudo."""
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    grouped_rules = {}
+    expected_devices = []
+
+    for kind, info, stable_number in binding_entries(left_info, right_info, select, helmet_info):
+        if not info:
+            raise ValueError(f"missing device information for {kind}")
+        serial_rule = (
+            f'ACTION=="add", KERNEL=="ttyUSB*", KERNELS=="{info[1]}", '
+            f'SUBSYSTEMS=="usb", MODE:="0777", SYMLINK+="ttyUSB{stable_number}"'
+        )
+        video_rule = (
+            f'ACTION=="add", KERNEL=="video[0-9]*", KERNELS=="{info[2]}", '
+            f'SUBSYSTEMS=="usb", ENV{{ID_V4L_CAPABILITIES}}=="*:capture:*", '
+            f'MODE:="0777", SYMLINK+="video{stable_number}"'
+        )
+        grouped_rules.setdefault(f"99-pika-{kind}-serial.rules", []).append(serial_rule)
+        grouped_rules.setdefault(f"99-pika-{kind}-fisheye.rules", []).append(video_rule)
+        expected_devices.extend([f"/dev/ttyUSB{stable_number}", f"/dev/video{stable_number}"])
+
+    environment = {}
+    if select in {"1", "5"}:
+        environment.update(pika_L_code=left_info[3], pika_R_code=right_info[3])
+    elif select == "3":
+        environment["pika_code"] = left_info[3]
+    if select == "4" and left_info[3]:
+        environment["pika_H_code"] = left_info[3]
+    if select == "5":
+        environment["pika_H_code"] = helmet_info[3]
+    for key, value in environment.items():
+        set_env_var_persistent(key, value)
+
+    rule_files = []
+    for filename, lines in sorted(grouped_rules.items()):
+        rule_path = output_dir / filename
+        rule_path.write_text("\n".join(lines) + "\n")
+        rule_files.append(filename)
+
+    manifest = {
+        "version": 1,
+        "selection": select,
+        "rules": rule_files,
+        "expected_devices": expected_devices,
+        "environment": environment,
+    }
+    manifest_path = output_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+    return manifest_path
 
 
 def generate_setup_bash(left_info, right_info, select, helmet_with_tracker=False, helmet_info=None):
@@ -264,7 +366,14 @@ sudo udevadm control --reload-rules && sudo service udev restart && sudo udevadm
     os.chmod(path, 0o755)
 
 
-def generate_start_bash(left_info, right_info, select, helmet_with_tracker=False, helmet_info=None):
+def generate_start_bash(
+    left_info,
+    right_info,
+    select,
+    helmet_with_tracker=False,
+    helmet_info=None,
+    output_dir=".",
+):
     if select == "1":
         path = "start_multi_sensor.bash"
         usb_num1 = 50
@@ -382,12 +491,37 @@ else
     source $SCRIPT_DIR/../install/setup.bash && ros2 launch sensor_tools open_multi_sensor_helmet_whit_tracker.launch.py l_depth_camera_no:=_$l_depth_camera_no r_depth_camera_no:=_$r_depth_camera_no h_depth_camera_no:=_$h_depth_camera_no l_serial_port:=$l_serial_port r_serial_port:=$r_serial_port h_serial_port:=$h_serial_port l_fisheye_port:=$l_fisheye_port r_fisheye_port:=$r_fisheye_port h_fisheye_port:=$h_fisheye_port camera_fps:=$camera_fps camera_width:=$camera_width camera_height:=$camera_height camera_profile:=$camera_width,$camera_height,$camera_fps
 fi
                 """
-    with open(path, "w") as f:
+    # Generated launchers may live outside the ROS workspace. Resolve the
+    # install prefix through the environment set by the container entrypoint.
+    content = content.replace(
+        "$SCRIPT_DIR/../install", "${PIKA_WS:-/workspace/Pika_data/pika_ros}/install"
+    )
+    content = content.replace("sudo chmod a+rw", "chmod a+rw")
+    output_path = Path(output_dir) / path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
         f.write(content)
-    os.chmod(path, 0o755)
+    os.chmod(output_path, 0o755)
+    return output_path
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Bind Pika devices to stable host device names.")
+    parser.add_argument(
+        "--host-managed",
+        action="store_true",
+        help="generate host udev rule files without trying to install them in the container",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=".",
+        help="directory for generated rules, manifest, and launcher",
+    )
+    return parser.parse_args()
 
 
 def main():
+    args = parse_arguments()
     print_bilingual("=== pika配置工具 ===", "=== Pika Setup Tool ===")
     helmet_with_tracker = False
     select = None
@@ -526,6 +660,26 @@ def main():
 
     # 生成配置文件
     print_bilingual("正在生成配置文件...", "Generating configuration files...")
+    if args.host_managed:
+        manifest_path = generate_host_bundle(
+            left_info, right_info, select, args.output_dir, helmet_info
+        )
+        start_path = generate_start_bash(
+            left_info,
+            right_info,
+            select,
+            helmet_with_tracker,
+            helmet_info,
+            args.output_dir,
+        )
+        print_bilingual(
+            "容器内设备识别完成；等待 run.py 在宿主机安装 udev 规则。",
+            "Device discovery is complete; run.py will install the udev rules on the host.",
+        )
+        print(f"PIKA_SETUP_MANIFEST={manifest_path}")
+        print(f"PIKA_START_SCRIPT={start_path}")
+        return
+
     generate_setup_bash(left_info, right_info, select, helmet_with_tracker, helmet_info)
     generate_start_bash(left_info, right_info, select, helmet_with_tracker, helmet_info)
     setup_path = "setup_multi_sensor.bash" if select=="1" else ("setup_multi_gripper.bash" if select=="2" else ("setup_sensor_gripper.bash" if select == "3" else ("setup_helmet.bash" if select == "4" else "setup_multi_sensor_helmet_whit_tracker.bash")))

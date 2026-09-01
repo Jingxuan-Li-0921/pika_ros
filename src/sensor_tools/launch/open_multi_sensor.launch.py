@@ -6,6 +6,7 @@ from launch.substitutions import LaunchConfiguration, Command, TextSubstitution
 from launch_ros.actions import Node
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.conditions import IfCondition
 
 
 def generate_launch_description():
@@ -25,6 +26,18 @@ def generate_launch_description():
         DeclareLaunchArgument('r_serial_port', default_value='/dev/ttyUSB1'),
         DeclareLaunchArgument('l_depth_camera_no', default_value='_230322270688'),
         DeclareLaunchArgument('r_depth_camera_no', default_value='_230322272619'),
+        DeclareLaunchArgument('start_locator', default_value='true'),
+        DeclareLaunchArgument('start_depth_cameras', default_value='true'),
+        DeclareLaunchArgument('start_fisheye_cameras', default_value='true'),
+        DeclareLaunchArgument('start_serial', default_value='true'),
+        DeclareLaunchArgument(
+            'l_capture_service',
+            default_value='/data_tools_dataCapture/capture_service_l'
+        ),
+        DeclareLaunchArgument(
+            'r_capture_service',
+            default_value='/data_tools_dataCapture/capture_service_r'
+        ),
         DeclareLaunchArgument('l_joint_name', default_value='gripper_l_center_joint'),
         DeclareLaunchArgument('r_joint_name', default_value='gripper_r_center_joint')
     ]
@@ -42,13 +55,21 @@ def generate_launch_description():
     r_depth_camera_no = LaunchConfiguration('r_depth_camera_no')
     l_joint_name = LaunchConfiguration('l_joint_name')
     r_joint_name = LaunchConfiguration('r_joint_name')
+    start_locator = LaunchConfiguration('start_locator')
+    start_depth_cameras = LaunchConfiguration('start_depth_cameras')
+    start_fisheye_cameras = LaunchConfiguration('start_fisheye_cameras')
+    start_serial = LaunchConfiguration('start_serial')
+    l_capture_service = LaunchConfiguration('l_capture_service')
+    r_capture_service = LaunchConfiguration('r_capture_service')
 
     locator_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('pika_locator'), 'launch', 'pika_double_locator.launch.py')])
+        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('pika_locator'), 'launch', 'pika_double_locator.launch.py')]),
+        condition=IfCondition(start_locator)
     )
 
     l_depth_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('realsense2_camera'), 'launch', 'rs_launch.py')]),
+        condition=IfCondition(start_depth_cameras),
         launch_arguments={'serial_no': l_depth_camera_no,
                           'camera_namespace': name,
                           'camera_name': "camera_l",
@@ -59,6 +80,7 @@ def generate_launch_description():
     )
     r_depth_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('realsense2_camera'), 'launch', 'rs_launch.py')]),
+        condition=IfCondition(start_depth_cameras),
         launch_arguments={'serial_no': r_depth_camera_no,
                           'camera_namespace': name,
                           'camera_name': "camera_r",
@@ -86,7 +108,8 @@ def generate_launch_description():
                 ('/camera_rgb/color/camera_info', [name,TextSubstitution(text='/camera_fisheye_l/color/camera_info')])
             ],
             respawn=True,
-            output='screen'
+            output='screen',
+            condition=IfCondition(start_fisheye_cameras)
         ),
         Node(
             package='sensor_tools',
@@ -102,7 +125,8 @@ def generate_launch_description():
                 ('/camera_rgb/color/camera_info', [name,TextSubstitution(text='/camera_fisheye_r/color/camera_info')])
             ],
             respawn=True,
-            output='screen'
+            output='screen',
+            condition=IfCondition(start_fisheye_cameras)
         ),
         Node(
             package='sensor_tools',
@@ -123,10 +147,11 @@ def generate_launch_description():
                 ('/teleop_status', '/teleop_status_l'),
                 ('/localization_status', '/pika_localization_status_l'),
                 ('/arm_control_status', '/arm_control_status_l'),
-                ('/data_tools_dataCapture/capture_service', '/data_tools_dataCapture/capture_service_l'),
+                ('/data_tools_dataCapture/capture_service', l_capture_service),
             ],
             respawn=True,
-            output='screen'
+            output='screen',
+            condition=IfCondition(start_serial)
         ),
         Node(
             package='sensor_tools',
@@ -147,9 +172,10 @@ def generate_launch_description():
                 ('/teleop_status', '/teleop_status_r'),
                 ('/localization_status', '/pika_localization_status_r'),
                 ('/arm_control_status', '/arm_control_status_r'),
-                ('/data_tools_dataCapture/capture_service', '/data_tools_dataCapture/capture_service_r'),
+                ('/data_tools_dataCapture/capture_service', r_capture_service),
             ],
             respawn=True,
-            output='screen'
+            output='screen',
+            condition=IfCondition(start_serial)
         )
     ])

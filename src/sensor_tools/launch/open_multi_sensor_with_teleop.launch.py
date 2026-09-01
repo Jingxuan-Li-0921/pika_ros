@@ -5,6 +5,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, Command, TextSubstitution
 from launch_ros.actions import Node
 from launch.actions import IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 
@@ -17,6 +18,7 @@ def generate_launch_description():
         DeclareLaunchArgument('name_index', default_value=''),
         DeclareLaunchArgument('l_serial_port', default_value='/dev/ttyUSB0'),
         DeclareLaunchArgument('r_serial_port', default_value='/dev/ttyUSB1'),
+        DeclareLaunchArgument('start_locator', default_value='true'),
         DeclareLaunchArgument('l_joint_name', default_value='gripper_l_center_joint'),
         DeclareLaunchArgument('r_joint_name', default_value='gripper_r_center_joint')
     ]
@@ -28,7 +30,8 @@ def generate_launch_description():
     r_joint_name = LaunchConfiguration('r_joint_name')
 
     locator_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('pika_locator'), 'launch', 'pika_double_locator.launch.py')])
+        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('pika_locator'), 'launch', 'pika_double_locator.launch.py')]),
+        condition=IfCondition(LaunchConfiguration('start_locator'))
     )
 
 

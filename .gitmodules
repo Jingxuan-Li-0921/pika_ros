@@ -4,8 +4,9 @@
 	branch = ros2
 [submodule "src/data_tools"]
 	path = src/data_tools
-	url = https://github.com/agilexrobotics/data_tools.git
-	branch = ros2
+	url = https://github.com/Jingxuan-Li-0921/data_tools.git
+	branch = pika-dual-capture
 [submodule "src/PikaAnyArm"]
 	path = src/PikaAnyArm
-	url = https://github.com/agilexrobotics/PikaAnyArm.git
+	url = https://github.com/Jingxuan-Li-0921/PikaAnyArm.git
+	branch = pika-dual-teleop
